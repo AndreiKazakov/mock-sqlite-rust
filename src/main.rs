@@ -42,7 +42,7 @@ fn main() -> Result<()> {
                     .join(" ")
             );
         }
-        query if query.starts_with("SELECT") => {
+        query if query.to_lowercase().starts_with("select") => {
             let table = query.split(' ').last().unwrap();
             let page_address = match schemas.into_iter().find(|s| s.table_name == table) {
                 None => bail!("Table {} not found", table),
