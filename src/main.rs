@@ -48,12 +48,13 @@ fn main() -> Result<()> {
                 None => bail!("Table {} not found", table),
                 Some(schema) => (schema.root_page as usize - 1) * db_header.page_size,
             };
-            let payload = get_payload(
-                &database[page_address..page_address + db_header.page_size],
-                3, // hard-coded for now
-                false,
-            )?;
-            println!("{}", payload.len())
+            // let payload = get_payload(
+            //     &database[page_address..page_address + db_header.page_size],
+            //     3, // hard-coded for now
+            //     false,
+            // )?;
+            let page_header = PageHeader::parse(&database[page_address..page_address + 8])?;
+            println!("{}", page_header.number_of_cells)
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
