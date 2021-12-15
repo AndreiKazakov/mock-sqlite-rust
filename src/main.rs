@@ -3,9 +3,11 @@ use std::fs::File;
 use std::io::prelude::*;
 
 use anyhow::{bail, Error, Result};
+use nom::bytes::complete::{tag, tag_no_case};
 use nom::character::complete::{alphanumeric1, multispace0};
+use nom::multi::separated_list1;
 use nom::sequence::{delimited, pair, preceded};
-use nom::{bytes::complete::tag_no_case, error, Err};
+use nom::{error, Err};
 
 use sqlite_starter_rust::db_header::DBHeader;
 use sqlite_starter_rust::record::Value;
@@ -53,19 +55,21 @@ fn main() -> Result<()> {
                 None => bail!("Table {} not found", table),
                 Some(schema) => (schema.root_page as usize - 1) * db_header.page_size,
             };
-            // let payload = get_payload(
-            //     &database[page_address..page_address + db_header.page_size],
-            //     3, // hard-coded for now
-            //     false,
-            // )?;
             let page_header = PageHeader::parse(&database[page_address..page_address + 8])?;
             println!("{}", page_header.number_of_cells)
         }
         query if query.to_lowercase().starts_with("select") => {
-            let (_, (col, table)) = pair(
+            let (_, (cols, table)) = pair(
                 preceded(
                     tag_no_case("select"),
-                    delimited(multispace0, alphanumeric1, multispace0),
+                    delimited(
+                        multispace0,
+                        separated_list1(
+                            tag(","),
+                            delimited(multispace0, alphanumeric1, multispace0),
+                        ),
+                        multispace0,
+                    ),
                 ),
                 preceded(
                     tag_no_case("from"),
@@ -80,10 +84,19 @@ fn main() -> Result<()> {
                 .ok_or_else(|| Error::msg(format!("Table {} not found", table)))?;
 
             let columns = schema.columns()?;
-            let col_index = columns
+            let col_indices = cols
                 .iter()
-                .position(|c| c == col)
-                .ok_or_else(|| Error::msg(format!("Column {} not found", col)))?;
+                .map(|&c| {
+                    columns
+                        .iter()
+                        .position(|column| column == c)
+                        .ok_or_else(|| Error::msg(format!("Column {} not found", c)))
+                })
+                .collect::<Result<Vec<usize>>>()?;
+
+            if col_indices.is_empty() {
+                bail!("Columns {} not found", cols.join(","))
+            }
 
             let page_address = (schema.root_page as usize - 1) * db_header.page_size;
 
@@ -95,7 +108,13 @@ fn main() -> Result<()> {
 
             let values: Vec<String> = payload
                 .into_iter()
-                .map(|row| format!("{}", row[col_index]))
+                .map(|row| {
+                    col_indices
+                        .iter()
+                        .map(|&i| row[i].to_string())
+                        .collect::<Vec<String>>()
+                        .join("|")
+                })
                 .collect();
 
             println!("{}", values.join("\n"))
