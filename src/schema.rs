@@ -40,7 +40,7 @@ impl Schema {
                 root_page: root_page as u8,
                 sql,
             }),
-            _ => bail!("Wrong schema format"),
+            cols => bail!("Wrong schema format: {:?}", cols),
         }
     }
 
