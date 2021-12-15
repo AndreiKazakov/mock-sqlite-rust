@@ -13,7 +13,7 @@ pub struct Schema {
     name: String,
     pub table_name: String,
     pub root_page: u8,
-    pub sql: String,
+    pub sql: Option<String>,
 }
 
 impl Schema {
@@ -38,13 +38,30 @@ impl Schema {
                 name,
                 table_name,
                 root_page: root_page as u8,
-                sql,
+                sql: Some(sql),
+            }),
+            (
+                Some(Value::Text(kind)),
+                Some(Value::Text(name)),
+                Some(Value::Text(table_name)),
+                Some(Value::I8(root_page)),
+                Some(Value::Null),
+            ) => Ok(Self {
+                kind,
+                name,
+                table_name,
+                root_page: root_page as u8,
+                sql: None,
             }),
             cols => bail!("Wrong schema format: {:?}", cols),
         }
     }
 
     pub fn columns(&self) -> Result<Vec<String>> {
+        let sql = self
+            .sql
+            .as_ref()
+            .ok_or_else(|| Error::msg("sqlite_schema.sql is NULL"))?;
         preceded(
             take_until("("),
             delimited(
@@ -55,7 +72,7 @@ impl Schema {
                 ),
                 preceded(multispace0, tag(")")),
             ),
-        )(&*self.sql)
+        )(&**sql)
         .map(|(_, res)| res.iter().map(|&s| s.to_owned()).collect())
         .map_err(|err: Err<error::Error<&str>>| Error::msg(err.to_string()))
     }
