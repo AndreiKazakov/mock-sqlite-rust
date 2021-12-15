@@ -1,5 +1,11 @@
+use anyhow::{bail, Error, Result};
+use nom::bytes::complete::{is_not, tag, take_until};
+use nom::character::complete::{alphanumeric1, multispace0, one_of};
+use nom::multi::{many1, separated_list1};
+use nom::sequence::{delimited, preceded, terminated};
+use nom::{error, Err};
+
 use crate::record::Value;
-use anyhow::{bail, Result};
 
 #[derive(Debug)]
 pub struct Schema {
@@ -7,7 +13,7 @@ pub struct Schema {
     name: String,
     pub table_name: String,
     pub root_page: u8,
-    sql: String,
+    pub sql: String,
 }
 
 impl Schema {
@@ -36,5 +42,21 @@ impl Schema {
             }),
             _ => bail!("Wrong schema format"),
         }
+    }
+
+    pub fn columns(&self) -> Result<Vec<String>> {
+        preceded(
+            take_until("("),
+            delimited(
+                terminated(tag("("), multispace0),
+                separated_list1(
+                    many1(one_of(",\t\n ")),
+                    terminated(alphanumeric1, is_not(",)")),
+                ),
+                preceded(multispace0, tag(")")),
+            ),
+        )(&*self.sql)
+        .map(|(_, res)| res.iter().map(|&s| s.to_owned()).collect())
+        .map_err(|err: Err<error::Error<&str>>| Error::msg(err.to_string()))
     }
 }

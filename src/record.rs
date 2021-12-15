@@ -1,5 +1,6 @@
 use crate::varint::parse_varint;
 use anyhow::{bail, Result};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
 pub enum Value {
@@ -13,6 +14,23 @@ pub enum Value {
     F(f64),
     Blob(Vec<u8>),
     Text(String),
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Null => write!(f, "NULL"),
+            Value::I8(v) => write!(f, "{}", v),
+            Value::I16(v) => write!(f, "{}", v),
+            Value::I24(v) => write!(f, "{}", v),
+            Value::I32(v) => write!(f, "{}", v),
+            Value::I48(v) => write!(f, "{}", v),
+            Value::I64(v) => write!(f, "{}", v),
+            Value::F(v) => write!(f, "{}", v),
+            Value::Blob(v) => write!(f, "{}", String::from_utf8_lossy(v).to_string()),
+            Value::Text(v) => write!(f, "{}", v),
+        }
+    }
 }
 
 /// Reads SQLite's "Record Format" as mentioned here:

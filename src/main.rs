@@ -1,12 +1,17 @@
-use anyhow::{bail, Result};
+use std::convert::TryInto;
+use std::fs::File;
+use std::io::prelude::*;
+
+use anyhow::{bail, Error, Result};
+use nom::character::complete::{alphanumeric1, multispace0};
+use nom::sequence::{delimited, pair, preceded};
+use nom::{bytes::complete::tag_no_case, error, Err};
+
 use sqlite_starter_rust::db_header::DBHeader;
 use sqlite_starter_rust::record::Value;
 use sqlite_starter_rust::{
     page_header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
 };
-use std::convert::TryInto;
-use std::fs::File;
-use std::io::prelude::*;
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -42,7 +47,7 @@ fn main() -> Result<()> {
                     .join(" ")
             );
         }
-        query if query.to_lowercase().starts_with("select") => {
+        query if query.to_lowercase().starts_with("select count") => {
             let table = query.split(' ').last().unwrap();
             let page_address = match schemas.into_iter().find(|s| s.table_name == table) {
                 None => bail!("Table {} not found", table),
@@ -55,6 +60,45 @@ fn main() -> Result<()> {
             // )?;
             let page_header = PageHeader::parse(&database[page_address..page_address + 8])?;
             println!("{}", page_header.number_of_cells)
+        }
+        query if query.to_lowercase().starts_with("select") => {
+            let (_, (col, table)) = pair(
+                preceded(
+                    tag_no_case("select"),
+                    delimited(multispace0, alphanumeric1, multispace0),
+                ),
+                preceded(
+                    tag_no_case("from"),
+                    delimited(multispace0, alphanumeric1, multispace0),
+                ),
+            )(query)
+            .map_err(|err: Err<error::Error<&str>>| Error::msg(err.to_string()))?;
+
+            let schema = schemas
+                .iter()
+                .find(|&s| s.table_name == table)
+                .ok_or_else(|| Error::msg(format!("Table {} not found", table)))?;
+
+            let columns = schema.columns()?;
+            let col_index = columns
+                .iter()
+                .position(|c| c == col)
+                .ok_or_else(|| Error::msg(format!("Column {} not found", col)))?;
+
+            let page_address = (schema.root_page as usize - 1) * db_header.page_size;
+
+            let payload = get_payload(
+                &database[page_address..page_address + db_header.page_size],
+                columns.len(),
+                false,
+            )?;
+
+            let values: Vec<String> = payload
+                .into_iter()
+                .map(|row| format!("{}", row[col_index]))
+                .collect();
+
+            println!("{}", values.join("\n"))
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
