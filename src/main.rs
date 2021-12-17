@@ -1,13 +1,17 @@
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::prelude::*;
 
 use anyhow::{bail, Error, Result};
-use nom::bytes::complete::{tag, tag_no_case};
+use nom::branch::alt;
+use nom::bytes::complete::{is_not, tag, tag_no_case};
 use nom::character::complete::{alphanumeric1, multispace0};
+use nom::combinator::opt;
 use nom::multi::separated_list1;
-use nom::sequence::{delimited, pair, preceded};
-use nom::{error, Err};
+use nom::number::complete::double;
+use nom::sequence::{delimited, preceded, separated_pair, tuple};
+use nom::{error, Err, Parser};
 
 use sqlite_starter_rust::db_header::DBHeader;
 use sqlite_starter_rust::record::Value;
@@ -59,7 +63,7 @@ fn main() -> Result<()> {
             println!("{}", page_header.number_of_cells)
         }
         query if query.to_lowercase().starts_with("select") => {
-            let (_, (cols, table)) = pair(
+            let (_, (cols, table, filter)) = tuple((
                 preceded(
                     tag_no_case("select"),
                     delimited(
@@ -75,7 +79,23 @@ fn main() -> Result<()> {
                     tag_no_case("from"),
                     delimited(multispace0, alphanumeric1, multispace0),
                 ),
-            )(query)
+                opt(preceded(
+                    tag_no_case("where"),
+                    delimited(
+                        multispace0,
+                        separated_pair(
+                            alphanumeric1,
+                            delimited(multispace0, tag("="), multispace0),
+                            alt((
+                                double.map(Value::F),
+                                delimited(tag("'"), is_not("'"), tag("'"))
+                                    .map(|v: &str| Value::Text(v.to_string())),
+                            )),
+                        ),
+                        multispace0,
+                    ),
+                )),
+            ))(query)
             .map_err(|err: Err<error::Error<&str>>| Error::msg(err.to_string()))?;
 
             let schema = schemas
@@ -84,12 +104,14 @@ fn main() -> Result<()> {
                 .ok_or_else(|| Error::msg(format!("Table {} not found", table)))?;
 
             let columns = schema.columns()?;
+            let indices: HashMap<&String, usize> =
+                columns.iter().enumerate().map(|(i, v)| (v, i)).collect();
             let col_indices = cols
                 .iter()
                 .map(|&c| {
-                    columns
-                        .iter()
-                        .position(|column| column == c)
+                    indices
+                        .get(&c.to_owned())
+                        .copied()
                         .ok_or_else(|| Error::msg(format!("Column {} not found", c)))
                 })
                 .collect::<Result<Vec<usize>>>()?;
@@ -106,8 +128,22 @@ fn main() -> Result<()> {
                 false,
             )?;
 
+            let filter_index = if let Some((col, val)) = filter {
+                let i = indices
+                    .get(&col.to_owned())
+                    .copied()
+                    .ok_or_else(|| Error::msg(format!("Column {} not found", col)))?;
+                Some((i, val))
+            } else {
+                None
+            };
+
             let values: Vec<String> = payload
                 .into_iter()
+                .filter(|row| match &filter_index {
+                    None => true,
+                    Some((col, val)) => &row[*col] == val,
+                })
                 .map(|row| {
                     col_indices
                         .iter()

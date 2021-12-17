@@ -16,6 +16,21 @@ pub enum Value {
     Text(String),
 }
 
+impl PartialEq for Value {
+    /// Doesn't support anything but I8, F, Text and Null at the moment
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Null, Value::Null) => true,
+            (Value::I8(a), Value::I8(b)) => a == b,
+            (Value::F(a), Value::F(b)) => a == b,
+            (Value::I8(a), Value::F(b)) => *a as f64 == *b,
+            (Value::F(a), Value::I8(b)) => *b as f64 == *a,
+            (Value::Text(a), Value::Text(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 impl Display for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
