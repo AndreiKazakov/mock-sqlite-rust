@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
-use std::io::prelude::*;
+use std::io::Read;
+use std::iter;
 
-use anyhow::{bail, Error, Result};
+use anyhow::{bail, Context, Error, Result};
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, tag_no_case};
 use nom::character::complete::{alphanumeric1, multispace0};
@@ -14,6 +15,7 @@ use nom::sequence::{delimited, preceded, separated_pair, tuple};
 use nom::{error, Err, Parser};
 
 use sqlite_starter_rust::db_header::DBHeader;
+use sqlite_starter_rust::page_header::BTreePage;
 use sqlite_starter_rust::record::Value;
 use sqlite_starter_rust::{
     page_header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
@@ -36,7 +38,7 @@ fn main() -> Result<()> {
     // Parse command and act accordingly
     let command = &args[2];
     let db_header = DBHeader::parse(&database)?;
-    let schemas = get_schemas(&database[..])?;
+    let schemas = get_schemas(&database[..], db_header.page_size)?;
 
     match command.as_str() {
         ".dbinfo" => {
@@ -59,7 +61,7 @@ fn main() -> Result<()> {
                 None => bail!("Table {} not found", table),
                 Some(schema) => (schema.root_page as usize - 1) * db_header.page_size,
             };
-            let page_header = PageHeader::parse(&database[page_address..page_address + 8])?;
+            let page_header = PageHeader::parse(&database[page_address..])?;
             println!("{}", page_header.number_of_cells)
         }
         query if query.to_lowercase().starts_with("select") => {
@@ -120,12 +122,11 @@ fn main() -> Result<()> {
                 bail!("Columns {} not found", cols.join(","))
             }
 
-            let page_address = (schema.root_page as usize - 1) * db_header.page_size;
-
             let payload = get_payload(
-                &database[page_address..page_address + db_header.page_size],
+                &database[..],
                 columns.len(),
-                false,
+                db_header.page_size,
+                schema.root_page as usize,
             )?;
 
             let filter_index = if let Some((col, val)) = filter {
@@ -161,8 +162,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn get_schemas(database: &[u8]) -> Result<Vec<Schema>> {
-    Ok(get_payload(database, 5, true)?
+fn get_schemas(database: &[u8], page_size: usize) -> Result<Vec<Schema>> {
+    Ok(get_payload(database, 5, page_size, 1)?
         .into_iter()
         .map(|record| Schema::parse(record).expect("Invalid record"))
         .collect::<Vec<_>>())
@@ -171,22 +172,57 @@ fn get_schemas(database: &[u8]) -> Result<Vec<Schema>> {
 fn get_payload(
     database: &[u8],
     column_count: usize,
-    is_first_page: bool,
+    page_size: usize,
+    page_number: usize,
 ) -> Result<Vec<Vec<Value>>> {
-    let offset = if is_first_page { 100 } else { 0 };
-    // Parse page header from database
-    let page_header = PageHeader::parse(&database[offset..offset + 8])?;
+    let db_header_offset = if page_number == 1 { 100 } else { 0 };
+    let page_address = (page_number as usize - 1) * page_size;
 
-    // Obtain all cell pointers
-    database[offset + 8..]
-        .chunks_exact(2)
-        .take(page_header.number_of_cells.into())
-        .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()))
+    // Parse page header from database
+    let page_header = PageHeader::parse(&database[db_header_offset + page_address..])?;
+
+    if page_header.page_type == BTreePage::LeafTable {
+        collect_cell_pointers(
+            &database[db_header_offset + page_address + page_header.size()..],
+            page_header.number_of_cells.into(),
+        )
+        .into_iter()
         .map(|cell_pointer| {
-            let stream = &database[cell_pointer as usize..];
+            let stream = &database[page_address + cell_pointer as usize..];
             let (_, offset) = parse_varint(stream);
-            let (_rowid, read_bytes) = parse_varint(&stream[offset..]);
-            parse_record(&stream[offset + read_bytes..], column_count)
+            let (rowid, read_bytes) = parse_varint(&stream[offset..]);
+            parse_record(&stream[offset + read_bytes..], column_count).map(|mut v| {
+                if v[0] == Value::Null {
+                    v[0] = Value::I64(rowid as i64);
+                }
+                v
+            })
         })
         .collect::<Result<Vec<_>>>()
+    } else {
+        let right_most_pointer = page_header
+            .right_most_pointer
+            .context("Right most pointer not found")?;
+        let cells = &database[db_header_offset + page_address + page_header.size()..];
+        collect_cell_pointers(cells, page_header.number_of_cells.into())
+            .into_iter()
+            .map(|cell_pointer| {
+                let stream = &database[page_address + cell_pointer as usize..];
+                let page = u32::from_be_bytes([stream[0], stream[1], stream[2], stream[3]]);
+                let (_rowid, _read_bytes) = parse_varint(&stream[4..]);
+                page
+            })
+            .chain(iter::once(right_most_pointer))
+            .map(|page| get_payload(database, column_count, page_size, page as usize))
+            .collect::<Result<Vec<_>>>()
+            .map(|contents| contents.into_iter().flatten().collect::<Vec<_>>())
+    }
+}
+
+fn collect_cell_pointers(database: &[u8], number_of_cells: usize) -> Vec<u16> {
+    database
+        .chunks_exact(2)
+        .take(number_of_cells)
+        .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()))
+        .collect::<Vec<_>>()
 }

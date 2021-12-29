@@ -1,6 +1,9 @@
-use crate::varint::parse_varint;
-use anyhow::{bail, Result};
+use std::convert::TryInto;
 use std::fmt::{Display, Formatter};
+
+use anyhow::{bail, Result};
+
+use crate::varint::parse_varint;
 
 #[derive(Debug)]
 pub enum Value {
@@ -78,6 +81,9 @@ fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<(Value, usize
         0 => (Value::Null, 0),
         // 8 bit twos-complement integer
         1 => (Value::I8(i8::from_be_bytes([stream[0]])), 1),
+        2 => (Value::I16(i16::from_be_bytes(stream[0..2].try_into()?)), 2),
+        4 => (Value::I32(i32::from_be_bytes(stream[0..4].try_into()?)), 4),
+        9 => (Value::I8(1), 0),
         // Text encoding
         n if serial_type >= 13 && serial_type % 2 == 1 => {
             let n_bytes = (n - 13) / 2;
@@ -86,6 +92,12 @@ fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<(Value, usize
                 Value::Text(String::from_utf8_lossy(&bytes).to_string()),
                 bytes.len(),
             )
+        }
+        n if serial_type >= 12 && serial_type % 2 == 0 => {
+            let n_bytes = (n - 12) / 2;
+            let bytes = stream[0..n_bytes as usize].to_vec();
+            let len = bytes.len();
+            (Value::Blob(bytes), len)
         }
         _ => bail!("Invalid serial_type: {}", serial_type),
     };
