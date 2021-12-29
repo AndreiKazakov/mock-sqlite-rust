@@ -70,7 +70,7 @@ fn main() -> Result<()> {
                         multispace0,
                         separated_list1(
                             tag(","),
-                            delimited(multispace0, alphanumeric1, multispace0),
+                            delimited(multispace0, is_not(" \t\r\n,"), multispace0),
                         ),
                         multispace0,
                     ),
@@ -84,7 +84,7 @@ fn main() -> Result<()> {
                     delimited(
                         multispace0,
                         separated_pair(
-                            alphanumeric1,
+                            is_not(" \t\r\n="),
                             delimited(multispace0, tag("="), multispace0),
                             alt((
                                 double.map(Value::F),

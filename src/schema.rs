@@ -1,6 +1,6 @@
 use anyhow::{bail, Error, Result};
 use nom::bytes::complete::{is_not, tag, take_until};
-use nom::character::complete::{alphanumeric1, multispace0, one_of};
+use nom::character::complete::{multispace0, one_of};
 use nom::multi::{many1, separated_list1};
 use nom::sequence::{delimited, preceded, terminated};
 use nom::{error, Err};
@@ -68,7 +68,7 @@ impl Schema {
                 terminated(tag("("), multispace0),
                 separated_list1(
                     many1(one_of(",\t\n ")),
-                    terminated(alphanumeric1, is_not(",)")),
+                    terminated(is_not(" \t\r\n,)"), is_not(",)")),
                 ),
                 preceded(multispace0, tag(")")),
             ),
