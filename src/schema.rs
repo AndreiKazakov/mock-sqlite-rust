@@ -10,7 +10,7 @@ use crate::record::Value;
 #[derive(Debug)]
 pub struct Schema {
     pub kind: String,
-    name: String,
+    pub name: String,
     pub table_name: String,
     pub root_page: u8,
     pub sql: Option<String>,

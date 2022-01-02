@@ -1,25 +1,15 @@
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::fs::File;
 use std::io::Read;
-use std::iter;
 
-use anyhow::{bail, Context, Error, Result};
-use nom::branch::alt;
-use nom::bytes::complete::{is_not, tag, tag_no_case};
-use nom::character::complete::{alphanumeric1, multispace0};
-use nom::combinator::opt;
-use nom::multi::separated_list1;
-use nom::number::complete::double;
-use nom::sequence::{delimited, preceded, separated_pair, tuple};
-use nom::{error, Err, Parser};
+use anyhow::{bail, Error, Result};
 
 use sqlite_starter_rust::db_header::DBHeader;
+use sqlite_starter_rust::page::{parse_table_interior, parse_table_leaf};
 use sqlite_starter_rust::page_header::BTreePage;
 use sqlite_starter_rust::record::Value;
-use sqlite_starter_rust::{
-    page_header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
-};
+use sqlite_starter_rust::sql::Select;
+use sqlite_starter_rust::{page_header::PageHeader, schema::Schema};
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -57,58 +47,27 @@ fn main() -> Result<()> {
         }
         query if query.to_lowercase().starts_with("select count") => {
             let table = query.split(' ').last().unwrap();
-            let page_address = match schemas.into_iter().find(|s| s.table_name == table) {
+            let page_address = match schemas.into_iter().find(|s| s.name == table) {
                 None => bail!("Table {} not found", table),
                 Some(schema) => (schema.root_page as usize - 1) * db_header.page_size,
             };
-            let page_header = PageHeader::parse(&database[page_address..])?;
+            let page_header =
+                PageHeader::parse(&database[page_address..page_address + db_header.page_size])?;
             println!("{}", page_header.number_of_cells)
         }
         query if query.to_lowercase().starts_with("select") => {
-            let (_, (cols, table, filter)) = tuple((
-                preceded(
-                    tag_no_case("select"),
-                    delimited(
-                        multispace0,
-                        separated_list1(
-                            tag(","),
-                            delimited(multispace0, is_not(" \t\r\n,"), multispace0),
-                        ),
-                        multispace0,
-                    ),
-                ),
-                preceded(
-                    tag_no_case("from"),
-                    delimited(multispace0, alphanumeric1, multispace0),
-                ),
-                opt(preceded(
-                    tag_no_case("where"),
-                    delimited(
-                        multispace0,
-                        separated_pair(
-                            is_not(" \t\r\n="),
-                            delimited(multispace0, tag("="), multispace0),
-                            alt((
-                                double.map(Value::F),
-                                delimited(tag("'"), is_not("'"), tag("'"))
-                                    .map(|v: &str| Value::Text(v.to_string())),
-                            )),
-                        ),
-                        multispace0,
-                    ),
-                )),
-            ))(query)
-            .map_err(|err: Err<error::Error<&str>>| Error::msg(err.to_string()))?;
+            let select = Select::parse_select(query)?;
 
             let schema = schemas
                 .iter()
-                .find(|&s| s.table_name == table)
-                .ok_or_else(|| Error::msg(format!("Table {} not found", table)))?;
+                .find(|&s| s.name == select.table)
+                .ok_or_else(|| Error::msg(format!("Table {} not found", select.table)))?;
 
             let columns = schema.columns()?;
             let indices: HashMap<&String, usize> =
                 columns.iter().enumerate().map(|(i, v)| (v, i)).collect();
-            let col_indices = cols
+            let col_indices = select
+                .columns
                 .iter()
                 .map(|&c| {
                     indices
@@ -119,7 +78,7 @@ fn main() -> Result<()> {
                 .collect::<Result<Vec<usize>>>()?;
 
             if col_indices.is_empty() {
-                bail!("Columns {} not found", cols.join(","))
+                bail!("Columns {} not found", select.columns.join(","))
             }
 
             let payload = get_payload(
@@ -129,7 +88,7 @@ fn main() -> Result<()> {
                 schema.root_page as usize,
             )?;
 
-            let filter_index = if let Some((col, val)) = filter {
+            let filter_index = if let Some((col, val)) = select.filter {
                 let i = indices
                     .get(&col.to_owned())
                     .copied()
@@ -177,52 +136,20 @@ fn get_payload(
 ) -> Result<Vec<Vec<Value>>> {
     let db_header_offset = if page_number == 1 { 100 } else { 0 };
     let page_address = (page_number as usize - 1) * page_size;
-
-    // Parse page header from database
     let page_header = PageHeader::parse(&database[db_header_offset + page_address..])?;
 
     if page_header.page_type == BTreePage::LeafTable {
-        collect_cell_pointers(
-            &database[db_header_offset + page_address + page_header.size()..],
-            page_header.number_of_cells.into(),
+        parse_table_leaf(
+            &database[page_address..],
+            db_header_offset,
+            page_header,
+            column_count,
         )
-        .into_iter()
-        .map(|cell_pointer| {
-            let stream = &database[page_address + cell_pointer as usize..];
-            let (_, offset) = parse_varint(stream);
-            let (rowid, read_bytes) = parse_varint(&stream[offset..]);
-            parse_record(&stream[offset + read_bytes..], column_count).map(|mut v| {
-                if v[0] == Value::Null {
-                    v[0] = Value::I64(rowid as i64);
-                }
-                v
-            })
-        })
-        .collect::<Result<Vec<_>>>()
     } else {
-        let right_most_pointer = page_header
-            .right_most_pointer
-            .context("Right most pointer not found")?;
-        let cells = &database[db_header_offset + page_address + page_header.size()..];
-        collect_cell_pointers(cells, page_header.number_of_cells.into())
+        parse_table_interior(&database[page_address..], db_header_offset, page_header)?
             .into_iter()
-            .map(|cell_pointer| {
-                let stream = &database[page_address + cell_pointer as usize..];
-                let page = u32::from_be_bytes([stream[0], stream[1], stream[2], stream[3]]);
-                let (_rowid, _read_bytes) = parse_varint(&stream[4..]);
-                page
-            })
-            .chain(iter::once(right_most_pointer))
-            .map(|page| get_payload(database, column_count, page_size, page as usize))
+            .map(|page| get_payload(database, column_count, page_size, page))
             .collect::<Result<Vec<_>>>()
             .map(|contents| contents.into_iter().flatten().collect::<Vec<_>>())
     }
-}
-
-fn collect_cell_pointers(database: &[u8], number_of_cells: usize) -> Vec<u16> {
-    database
-        .chunks_exact(2)
-        .take(number_of_cells)
-        .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()))
-        .collect::<Vec<_>>()
 }
