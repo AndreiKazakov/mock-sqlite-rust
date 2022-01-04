@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
 
 use anyhow::{bail, Error, Result};
 
@@ -10,6 +9,7 @@ use sqlite_starter_rust::page_header::BTreePage;
 use sqlite_starter_rust::record::Value;
 use sqlite_starter_rust::sql::Select;
 use sqlite_starter_rust::{page_header::PageHeader, schema::Schema};
+use std::os::unix::fs::FileExt;
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -20,15 +20,14 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    // Read database file into database
     let mut file = File::open(&args[1])?;
-    let mut database = Vec::new();
-    file.read_to_end(&mut database)?;
+    let db_header_stream = &mut [0u8; 100];
+    file.read_exact_at(db_header_stream, 0)?;
+    let db_header = DBHeader::parse(db_header_stream)?;
+    let schemas = get_schemas(&mut file, db_header.page_size)?;
 
     // Parse command and act accordingly
     let command = &args[2];
-    let db_header = DBHeader::parse(&database)?;
-    let schemas = get_schemas(&database[..], db_header.page_size)?;
 
     match command.as_str() {
         ".dbinfo" => {
@@ -51,8 +50,9 @@ fn main() -> Result<()> {
                 None => bail!("Table {} not found", table),
                 Some(schema) => (schema.root_page as usize - 1) * db_header.page_size,
             };
-            let page_header =
-                PageHeader::parse(&database[page_address..page_address + db_header.page_size])?;
+            let mut page = Vec::with_capacity(db_header.page_size);
+            file.read_exact_at(&mut page, page_address as u64)?;
+            let page_header = PageHeader::parse(&page)?;
             println!("{}", page_header.number_of_cells)
         }
         query if query.to_lowercase().starts_with("select") => {
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
             }
 
             let payload = get_payload(
-                &database[..],
+                &mut file,
                 columns.len(),
                 db_header.page_size,
                 schema.root_page as usize,
@@ -124,34 +124,32 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn get_schemas(database: &[u8], page_size: usize) -> Result<Vec<Schema>> {
-    Ok(get_payload(database, 5, page_size, 1)?
+fn get_schemas(file: &mut File, page_size: usize) -> Result<Vec<Schema>> {
+    Ok(get_payload(file, 5, page_size, 1)?
         .into_iter()
         .map(|record| Schema::parse(record).expect("Invalid record"))
         .collect::<Vec<_>>())
 }
 
 fn get_payload(
-    database: &[u8],
+    file: &mut File,
     column_count: usize,
     page_size: usize,
     page_number: usize,
 ) -> Result<Vec<Vec<Value>>> {
     let db_header_offset = if page_number == 1 { 100 } else { 0 };
-    let page_address = (page_number as usize - 1) * page_size;
-    let page_header = PageHeader::parse(&database[db_header_offset + page_address..])?;
+    let page_address = ((page_number - 1) * page_size) as u64;
+
+    let mut page = vec![0; page_size];
+    file.read_exact_at(&mut page, page_address)?;
+    let page_header = PageHeader::parse(&page[db_header_offset..])?;
 
     if page_header.page_type == BTreePage::LeafTable {
-        parse_table_leaf(
-            &database[page_address..],
-            db_header_offset,
-            page_header,
-            column_count,
-        )
+        parse_table_leaf(&page, db_header_offset, page_header, column_count)
     } else {
-        parse_table_interior(&database[page_address..], db_header_offset, page_header)?
+        parse_table_interior(&page, db_header_offset, page_header)?
             .into_iter()
-            .map(|page| get_payload(database, column_count, page_size, page))
+            .map(|page| get_payload(file, column_count, page_size, page))
             .collect::<Result<Vec<_>>>()
             .map(|contents| contents.into_iter().flatten().collect::<Vec<_>>())
     }
