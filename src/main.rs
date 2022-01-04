@@ -64,8 +64,11 @@ fn main() -> Result<()> {
                 .ok_or_else(|| Error::msg(format!("Table {} not found", select.table)))?;
 
             let columns = schema.columns()?;
-            let indices: HashMap<&String, usize> =
-                columns.iter().enumerate().map(|(i, v)| (v, i)).collect();
+            let indices: HashMap<&String, usize> = columns
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (&v.name, i))
+                .collect();
             let col_indices = select
                 .columns
                 .iter()

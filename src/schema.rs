@@ -1,11 +1,7 @@
 use anyhow::{bail, Error, Result};
-use nom::bytes::complete::{is_not, tag, take_until};
-use nom::character::complete::{multispace0, one_of};
-use nom::multi::{many1, separated_list1};
-use nom::sequence::{delimited, preceded, terminated};
-use nom::{error, Err};
 
 use crate::record::Value;
+use crate::sql::{Column, CreateTable};
 
 #[derive(Debug)]
 pub struct Schema {
@@ -13,7 +9,7 @@ pub struct Schema {
     pub name: String,
     pub table_name: String,
     pub root_page: u8,
-    pub sql: Option<String>,
+    pub sql: Option<CreateTable>,
 }
 
 impl Schema {
@@ -38,7 +34,7 @@ impl Schema {
                 name,
                 table_name,
                 root_page: root_page as u8,
-                sql: Some(sql),
+                sql: Some(CreateTable::parse(sql)?),
             }),
             (
                 Some(Value::Text(kind)),
@@ -57,23 +53,10 @@ impl Schema {
         }
     }
 
-    pub fn columns(&self) -> Result<Vec<String>> {
-        let sql = self
-            .sql
+    pub fn columns(&self) -> Result<&Vec<Column>> {
+        self.sql
             .as_ref()
-            .ok_or_else(|| Error::msg("sqlite_schema.sql is NULL"))?;
-        preceded(
-            take_until("("),
-            delimited(
-                terminated(tag("("), multispace0),
-                separated_list1(
-                    many1(one_of(",\t\n ")),
-                    terminated(is_not(" \t\r\n,)"), is_not(",)")),
-                ),
-                preceded(multispace0, tag(")")),
-            ),
-        )(&**sql)
-        .map(|(_, res)| res.iter().map(|&s| s.to_owned()).collect())
-        .map_err(|err: Err<error::Error<&str>>| Error::msg(err.to_string()))
+            .map(|ct| &ct.columns)
+            .ok_or_else(|| Error::msg("sqlite_schema.sql is NULL"))
     }
 }
