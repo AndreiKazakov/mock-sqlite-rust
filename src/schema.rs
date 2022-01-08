@@ -57,7 +57,7 @@ impl Schema {
         match self
             .sql
             .as_ref()
-            .ok_or_else(|| Error::msg("No create statement found"))?
+            .ok_or_else(|| Error::msg(format!("No create statement found for {}", self.name)))?
         {
             CreateStatement::CreateTable { columns, .. } => {
                 Ok(columns.iter().map(|c| &c.name).collect())
