@@ -100,8 +100,11 @@ impl DB {
             BTreePage::InteriorIndex => {
                 let index_btree = parse_index_interior(&page, page_header, column_count)?;
                 let branch = index_btree.left.into_iter().find(|(_, vs)| value <= &vs[0]);
-                if let Some((_, vs)) = &branch {
-                    buffer.push(vs[vs.len() - 1].get_numeric_value().unwrap() as usize)
+                match &branch {
+                    Some((_, vs)) if &vs[0] == value => {
+                        buffer.push(vs[vs.len() - 1].get_numeric_value().unwrap() as usize)
+                    }
+                    _ => {}
                 }
                 let page = branch.map(|(page, _)| page).unwrap_or(index_btree.right);
                 self.search_in_index(column_count, page, value, buffer)
