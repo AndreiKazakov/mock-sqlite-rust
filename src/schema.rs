@@ -1,15 +1,15 @@
 use anyhow::{bail, Error, Result};
 
 use crate::record::Value;
-use crate::sql::{Column, CreateTable};
+use crate::sql::CreateStatement;
 
 #[derive(Debug)]
 pub struct Schema {
     pub kind: String,
     pub name: String,
     pub table_name: String,
-    pub root_page: u8,
-    pub sql: Option<CreateTable>,
+    pub root_page: usize,
+    pub sql: Option<CreateStatement>,
 }
 
 impl Schema {
@@ -33,8 +33,8 @@ impl Schema {
                 kind,
                 name,
                 table_name,
-                root_page: root_page as u8,
-                sql: Some(CreateTable::parse(sql)?),
+                root_page: root_page as usize,
+                sql: Some(CreateStatement::parse(sql)?),
             }),
             (
                 Some(Value::Text(kind)),
@@ -46,17 +46,23 @@ impl Schema {
                 kind,
                 name,
                 table_name,
-                root_page: root_page as u8,
+                root_page: root_page as usize,
                 sql: None,
             }),
             cols => bail!("Wrong schema format: {:?}", cols),
         }
     }
 
-    pub fn columns(&self) -> Result<&Vec<Column>> {
-        self.sql
+    pub fn columns(&self) -> Result<Vec<&String>> {
+        match self
+            .sql
             .as_ref()
-            .map(|ct| &ct.columns)
-            .ok_or_else(|| Error::msg("sqlite_schema.sql is NULL"))
+            .ok_or_else(|| Error::msg("No create statement found"))?
+        {
+            CreateStatement::CreateTable { columns, .. } => {
+                Ok(columns.iter().map(|c| &c.name).collect())
+            }
+            CreateStatement::CreateIndex { columns, .. } => Ok(columns.iter().collect()),
+        }
     }
 }

@@ -34,10 +34,11 @@ impl PageHeader {
         let number_of_cells = u16::from_be_bytes(stream[3..5].try_into()?);
         let start_of_content_area = u16::from_be_bytes(stream[5..7].try_into()?);
         let fragmented_free_bytes = stream[7];
-        let right_most_pointer = if page_type == BTreePage::InteriorTable {
-            Some(u32::from_be_bytes(stream[8..12].try_into()?))
-        } else {
-            None
+        let right_most_pointer = match page_type {
+            BTreePage::InteriorTable | BTreePage::InteriorIndex => {
+                Some(u32::from_be_bytes(stream[8..12].try_into()?))
+            }
+            _ => None,
         };
         let header = PageHeader {
             page_type,

@@ -1,14 +1,15 @@
 use anyhow::{Error, Result};
+use nom::{Err, error, Parser};
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, tag_no_case};
-use nom::character::complete::{multispace0, multispace1, one_of};
+use nom::character::complete::{multispace0, multispace1};
 use nom::combinator::opt;
-use nom::multi::{many1, separated_list1};
+use nom::multi::separated_list1;
 use nom::number::complete::double;
 use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
-use nom::{error, Err, Parser};
 
 use crate::record::Value;
+use crate::sql::CreateStatement::CreateIndex;
 
 pub struct Select<'a> {
     pub columns: Vec<&'a str>,
@@ -68,13 +69,54 @@ pub struct Column {
 }
 
 #[derive(Debug)]
-pub struct CreateTable {
-    pub name: String,
-    pub columns: Vec<Column>,
+pub enum CreateStatement {
+    CreateTable {
+        name: String,
+        columns: Vec<Column>,
+    },
+    CreateIndex {
+        name: String,
+        table: String,
+        columns: Vec<String>,
+    },
 }
 
-impl CreateTable {
+impl CreateStatement {
     pub fn parse(query: String) -> Result<Self> {
+        if query.to_lowercase().starts_with("create table") {
+            Self::parse_create_table(query)
+        } else {
+            Self::parse_create_index(query)
+        }
+    }
+    pub fn parse_create_index(query: String) -> Result<Self> {
+        let (_, (name, table, columns)) = tuple((
+            preceded(
+                tag_no_case("create index "),
+                terminated(is_not(" \t\r\n,)("), multispace0),
+            ),
+            preceded(
+                tag_no_case("on "),
+                terminated(is_not(" \t\r\n,)("), multispace0),
+            ),
+            delimited(
+                terminated(tag("("), multispace0),
+                separated_list1(
+                    delimited(multispace0, tag(","), multispace0),
+                    is_not(" \t\r\n,)("),
+                ),
+                terminated(tag(")"), multispace0),
+            ),
+        ))(&*query)
+        .map_err(|err: Err<error::Error<&str>>| Error::msg(err.to_string()))?;
+        Ok(CreateIndex {
+            name: name.to_string(),
+            table: table.to_string(),
+            columns: columns.into_iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    pub fn parse_create_table(query: String) -> Result<Self> {
         let (_, (name, cols)) = tuple((
             preceded(
                 tag_no_case("create table "),
@@ -83,11 +125,11 @@ impl CreateTable {
             delimited(
                 terminated(tag("("), multispace0),
                 separated_list1(
-                    many1(one_of(",\t\r\n ")),
+                    delimited(multispace0, tag(","), multispace0),
                     tuple((
                         alt((
                             is_not(" \t\r\n\",)"),
-                            delimited(tag("\""), is_not(" \t\r\",)"), tag("\"")),
+                            delimited(tag("\""), is_not("\""), tag("\"")),
                         )),
                         opt(preceded(multispace1, is_not(" \t\r\n,)"))),
                         opt(preceded(multispace1, tag_no_case("not null"))),
@@ -111,7 +153,7 @@ impl CreateTable {
             })
             .collect();
 
-        Ok(Self {
+        Ok(Self::CreateTable {
             name: name.to_owned(),
             columns,
         })

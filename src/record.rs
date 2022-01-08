@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::convert::TryInto;
 use std::fmt::{Display, Formatter};
 
@@ -5,7 +6,7 @@ use anyhow::{bail, Result};
 
 use crate::varint::parse_varint;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Null,
     I8(i8),
@@ -19,17 +20,45 @@ pub enum Value {
     Text(String),
 }
 
+impl Value {
+    pub fn get_numeric_value(&self) -> Result<f64> {
+        match self {
+            Value::I8(n) => Ok(*n as f64),
+            Value::I16(n) => Ok(*n as f64),
+            Value::I24(n) => Ok(*n as f64),
+            Value::I32(n) => Ok(*n as f64),
+            Value::I48(n) => Ok(*n as f64),
+            Value::I64(n) => Ok(*n as f64),
+            Value::F(n) => Ok(*n),
+            _ => bail!("No numeric value"),
+        }
+    }
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if let (Ok(s), Ok(o)) = (self.get_numeric_value(), other.get_numeric_value()) {
+            s.partial_cmp(&o)
+        } else {
+            match (self, other) {
+                (Value::Null, Value::Null) => Some(Ordering::Equal),
+                (Value::Text(s), Value::Text(o)) => s.partial_cmp(o),
+                _ => None,
+            }
+        }
+    }
+}
+
 impl PartialEq for Value {
-    /// Doesn't support anything but I8, F, Text and Null at the moment
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Value::Null, Value::Null) => true,
-            (Value::I8(a), Value::I8(b)) => a == b,
-            (Value::F(a), Value::F(b)) => a == b,
-            (Value::I8(a), Value::F(b)) => *a as f64 == *b,
-            (Value::F(a), Value::I8(b)) => *b as f64 == *a,
-            (Value::Text(a), Value::Text(b)) => a == b,
-            _ => false,
+        if let (Ok(s), Ok(o)) = (self.get_numeric_value(), other.get_numeric_value()) {
+            s == o
+        } else {
+            match (self, other) {
+                (Value::Null, Value::Null) => true,
+                (Value::Text(a), Value::Text(b)) => a == b,
+                _ => false,
+            }
         }
     }
 }
@@ -82,6 +111,10 @@ fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<(Value, usize
         // 8 bit twos-complement integer
         1 => (Value::I8(i8::from_be_bytes([stream[0]])), 1),
         2 => (Value::I16(i16::from_be_bytes(stream[0..2].try_into()?)), 2),
+        3 => (
+            Value::I24(i32::from_be_bytes([0, stream[0], stream[1], stream[2]])),
+            3,
+        ),
         4 => (Value::I32(i32::from_be_bytes(stream[0..4].try_into()?)), 4),
         9 => (Value::I8(1), 0),
         // Text encoding
