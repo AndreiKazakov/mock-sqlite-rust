@@ -198,7 +198,10 @@ fn find_applicable_index<'a, 'b>(
         Some((k, _)) => {
             let mut res = None;
             for s in schemas.iter() {
-                let is_index_applicable = s.columns()?.contains(&&k.to_string());
+                let is_index_applicable = match s.columns() {
+                    Ok(cols) => cols.contains(&&k.to_string()),
+                    _ => false,
+                };
                 if s.kind == "index" && s.table_name == select.table && is_index_applicable {
                     res = Some(s);
                     break;
