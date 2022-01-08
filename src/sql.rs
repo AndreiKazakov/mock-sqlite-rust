@@ -1,5 +1,4 @@
 use anyhow::{Error, Result};
-use nom::{Err, error, Parser};
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, tag_no_case};
 use nom::character::complete::{multispace0, multispace1};
@@ -7,6 +6,7 @@ use nom::combinator::opt;
 use nom::multi::separated_list1;
 use nom::number::complete::double;
 use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
+use nom::{error, Err, Parser};
 
 use crate::record::Value;
 use crate::sql::CreateStatement::CreateIndex;
@@ -135,7 +135,7 @@ impl CreateStatement {
                         opt(preceded(multispace1, tag_no_case("not null"))),
                         opt(preceded(
                             multispace1,
-                            tag_no_case("primary key autoincrement"),
+                            terminated(tag_no_case("primary key"), opt(tag(" autoincrement"))),
                         )),
                     )),
                 ),
