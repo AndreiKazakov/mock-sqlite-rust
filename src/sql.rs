@@ -135,7 +135,10 @@ impl CreateStatement {
                         opt(preceded(multispace1, tag_no_case("not null"))),
                         opt(preceded(
                             multispace1,
-                            terminated(tag_no_case("primary key"), opt(tag(" autoincrement"))),
+                            terminated(
+                                preceded(opt(tag("primary ")), tag_no_case("key")),
+                                opt(tag(" autoincrement")),
+                            ),
                         )),
                     )),
                 ),
