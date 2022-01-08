@@ -20,14 +20,14 @@ impl Schema {
             items.next(),
             items.next(),
             items.next(),
-            items.next(),
+            items.next().map(|page| page.get_numeric_value()),
             items.next(),
         ) {
             (
                 Some(Value::Text(kind)),
                 Some(Value::Text(name)),
                 Some(Value::Text(table_name)),
-                Some(Value::I8(root_page)),
+                Some(Ok(root_page)),
                 Some(Value::Text(sql)),
             ) => Ok(Self {
                 kind,
@@ -40,7 +40,7 @@ impl Schema {
                 Some(Value::Text(kind)),
                 Some(Value::Text(name)),
                 Some(Value::Text(table_name)),
-                Some(Value::I8(root_page)),
+                Some(Ok(root_page)),
                 Some(Value::Null),
             ) => Ok(Self {
                 kind,
